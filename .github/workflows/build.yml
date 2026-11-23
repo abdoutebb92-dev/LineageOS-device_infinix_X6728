@@ -1,1 +1,26 @@
 
+name: Check GitHub Actions Runner
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runner-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report runner resources
+        run: |
+          echo "=== CPU ==="
+          nproc
+          lscpu
+          echo "=== MEMORY ==="
+          free -h
+          echo "=== DISK ==="
+          df -hT /
+          df -hT "$GITHUB_WORKSPACE"
+          echo "=== OS ==="
+          cat /etc/os-release

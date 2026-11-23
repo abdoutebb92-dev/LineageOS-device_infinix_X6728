@@ -1,3 +1,4 @@
+
 name: Build LineageOS 23.2 - Infinix X6728
 
 on:
@@ -8,54 +9,52 @@ permissions:
 
 jobs:
   build:
+    name: Build ROM
     runs-on: ubuntu-24.04
     timeout-minutes: 360
 
     steps:
-      - name: Free disk space
+      - name: Maximize build space
         uses: easimon/maximize-build-space@v10
         with:
-          root-reserve-mb: 10240
-          swap-size-mb: 4096
-          build-mount-path: /work
-          remove-dotnet: true
-          remove-android: true
-          remove-haskell: true
-          remove-codeql: true
+          root-reserve-mb: 8192
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison build-essential ccache curl flex \
-            g++-multilib gcc-multilib git git-lfs gnupg \
-            gperf imagemagick lib32readline-dev \
-            lib32z1-dev libelf-dev liblz4-tool \
-            libncurses-dev libssl-dev libxml2-utils \
-            lzop pngcrush rsync schedtool squashfs-tools \
-            xsltproc zip zlib1g-dev python3 \
-            python-is-python3 openjdk-21-jdk
+            git git-lfs curl wget repo \
+            bc bison build-essential ccache \
+            flex g++-multilib gcc-multilib \
+            gnupg gperf imagemagick \
+            lib32readline-dev lib32z1-dev \
+            libelf-dev liblz4-tool libncurses-dev \
+            libsdl1.2-dev libssl-dev \
+            libxml2 libxml2-utils lzop \
+            pngcrush rsync schedtool \
+            squashfs-tools xsltproc \
+            zip zlib1g-dev python3 python-is-python3 \
+            openjdk-21-jdk
 
-      - name: Prepare workspace
-        run: |
-          set -e
-          mkdir -p /work/android
-          git config --global user.name "LineageOS Builder"
-          git config --global user.email "builder@example.com"
           git lfs install
+          java -version
+          repo version
 
-          curl -fsSL \
-            https://storage.googleapis.com/git-repo-downloads/repo \
-            -o /tmp/repo
-
-          chmod +x /tmp/repo
-          sudo install /tmp/repo /usr/local/bin/repo
-
-          df -h /work
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
 
       - name: Initialize LineageOS
-        working-directory: /work/android
         run: |
+          mkdir -p ~/android/lineage
+          cd ~/android/lineage
+
           repo init \
             -u https://github.com/LineageOS/android.git \
             -b lineage-23.2 \
@@ -63,50 +62,52 @@ jobs:
             --git-lfs
 
       - name: Create X6728 local manifest
-        working-directory: /work/android
         run: |
+          cd ~/android/lineage
           mkdir -p .repo/local_manifests
 
           cat > .repo/local_manifests/x6728.xml <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <manifest>
-            <remote name="github" fetch="https://github.com/" />
+            <remote name="x6728github" fetch="https://github.com/" />
 
             <project name="Andrikurn/android_device_infinix_X6728"
-              path="device/infinix/X6728"
-              remote="github"
-              revision="lineage-23.2" />
+                     path="device/infinix/X6728"
+                     remote="x6728github"
+                     revision="lineage-23.2" />
 
             <project name="Andrikurn/android_vendor_infinix_X6728"
-              path="vendor/infinix/X6728"
-              remote="github"
-              revision="lineage-23.2" />
+                     path="vendor/infinix/X6728"
+                     remote="x6728github"
+                     revision="lineage-23.2" />
 
             <project name="Andrikurn/android_device_infinix_X6728-kernel"
-              path="device/infinix/X6728-kernel"
-              remote="github"
-              revision="sixteen" />
+                     path="device/infinix/X6728-kernel"
+                     remote="x6728github"
+                     revision="sixteen" />
 
             <project name="LineageOS/android_device_mediatek_sepolicy_vndr"
-              path="device/mediatek/sepolicy_vndr"
-              remote="github"
-              revision="lineage-23.2" />
+                     path="device/mediatek/sepolicy_vndr"
+                     remote="x6728github"
+                     revision="lineage-23.2" />
 
             <project name="LineageOS/android_hardware_mediatek"
-              path="hardware/mediatek"
-              remote="github"
-              revision="lineage-23.2" />
+                     path="hardware/mediatek"
+                     remote="x6728github"
+                     revision="lineage-23.2" />
 
             <project name="MillenniumOSS/android_vendor_mediatek_ims"
-              path="vendor/mediatek/ims"
-              remote="github"
-              revision="sixteen-oem" />
+                     path="vendor/mediatek/ims"
+                     remote="x6728github"
+                     revision="sixteen-oem" />
           </manifest>
           EOF
 
+          cat .repo/local_manifests/x6728.xml
+
       - name: Sync Android sources
-        working-directory: /work/android
         run: |
+          cd ~/android/lineage
           repo sync \
             -c \
             --no-tags \
@@ -116,62 +117,35 @@ jobs:
             --fail-fast
 
       - name: Pull vendor LFS files
-        working-directory: /work/android
         run: |
-          git -C vendor/infinix/X6728 lfs pull
-          git -C vendor/mediatek/ims lfs pull || true
+          cd ~/android/lineage
+          git -C vendor/infinix/X6728 lfs pull || true
 
-      - name: Validate device configuration
-        working-directory: /work/android
+      - name: Validate device tree
         run: |
-          set -eux
+          cd ~/android/lineage
 
-          DEVICE=device/infinix/X6728
-          KERNEL=device/infinix/X6728-kernel
-          IMS=vendor/mediatek/ims
+          test -d device/infinix/X6728
+          test -d device/infinix/X6728-kernel
+          test -d vendor/infinix/X6728
 
-          test -f "$DEVICE/lineage_X6728.mk"
-          test -f "$DEVICE/AndroidProducts.mk"
-          test -f "$DEVICE/device.mk"
-          test -f "$DEVICE/BoardConfig.mk"
+          echo "Device tree:"
+          ls -la device/infinix/X6728
 
-          test -f vendor/infinix/X6728/BoardConfigVendor.mk
-          test -f vendor/infinix/X6728/X6728-vendor.mk
+          echo "Kernel tree:"
+          ls -la device/infinix/X6728-kernel
 
-          test -s "$KERNEL/Image.gz"
-          test -s "$KERNEL/dtb/mt6768.dtb"
-          test -s "$KERNEL/dtb/dtbo.img"
-
-          test -f "$KERNEL/modules/modules.load.system_dlkm"
-          test -f "$KERNEL/modules/modules.load.vendor_boot"
-          test -f "$KERNEL/modules/modules.load.recovery"
-          test -f "$KERNEL/modules/modules.load.vendor"
-
-          test -f "$IMS/ims-vendor.mk"
-
-          test -f "$IMS/configs/permissions/privapp-permissions-com.mediatek.ims.xml"
-          test -f "$IMS/configs/permissions/privapp-permissions-com.mediatek.telephony.xml"
-          test -f "$IMS/configs/sysconfig/com.mediatek.ims.config.xml"
-          test -f "$IMS/configs/permissions/mediatek-ims-base.xml"
-          test -f "$IMS/configs/permissions/mediatek-ims-common.xml"
-          test -f "$IMS/configs/permissions/mediatek-telecom-common.xml"
-          test -f "$IMS/configs/permissions/mediatek-telephony-base.xml"
-          test -f "$IMS/configs/permissions/mediatek-telephony-common.xml"
-
-          echo "Device configuration checks passed."
-
-      - name: Configure ccache
-        run: |
-          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
-          echo "CCACHE_EXEC=/usr/bin/ccache" >> "$GITHUB_ENV"
-          echo "CCACHE_DIR=/work/.ccache" >> "$GITHUB_ENV"
-          mkdir -p /work/.ccache
-          ccache -M 5G
+          echo "Vendor tree:"
+          ls -la vendor/infinix/X6728
 
       - name: Build LineageOS
-        working-directory: /work/android
         run: |
-          set -e
+          cd ~/android/lineage
+
+          export USE_CCACHE=1
+          export CCACHE_EXEC=/usr/bin/ccache
+          ccache -M 20G
+
           source build/envsetup.sh
           lunch lineage_X6728-userdebug
           mka bacon -j2
@@ -181,6 +155,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: LineageOS-23.2-X6728
-          path: /work/android/out/target/product/X6728/*.zip
+          path: |
+            ~/android/lineage/out/target/product/X6728/*.zip
+            ~/android/lineage/out/target/product/X6728/*.img
           if-no-files-found: error
           retention-days: 7

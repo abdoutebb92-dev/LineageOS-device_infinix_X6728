@@ -15,24 +15,32 @@ jobs:
       BUILD_DIR: ${{ github.workspace }}/lineage
 
     steps:
-      # This must run before apt installs: it moves the workspace onto the
-      # combined build volume and removes large preinstalled toolchains we do not use.
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@v10
-        with:
-          root-reserve-mb: 4096
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-docker-images: 'true'
+      # Keep the runner's original single root filesystem. Do not create an LVM
+      # build volume: the previous action filled / while allocating a second volume.
+      - name: Free unused runner software on the single filesystem
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /var/lib/docker
+          sudo apt-get clean
+          mkdir -p "$BUILD_DIR/tmp/apt/lists" "$BUILD_DIR/tmp/apt/archives"
+          echo "TMPDIR=$BUILD_DIR/tmp" >> "$GITHUB_ENV"
+          echo "TMP=$BUILD_DIR/tmp" >> "$GITHUB_ENV"
+          echo "TEMP=$BUILD_DIR/tmp" >> "$GITHUB_ENV"
+          echo "GIT_LFS_SKIP_SMUDGE=1" >> "$GITHUB_ENV"
+          echo "=== Single filesystem after cleanup ==="
+          df -hT /
+          df -i /
+          findmnt -T "$GITHUB_WORKSPACE"
 
       - name: Install only required build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get \
+            -o Dir::State::lists="$BUILD_DIR/tmp/apt/lists" \
+            -o Dir::Cache::archives="$BUILD_DIR/tmp/apt/archives" update
+          sudo apt-get \
+            -o Dir::State::lists="$BUILD_DIR/tmp/apt/lists" \
+            -o Dir::Cache::archives="$BUILD_DIR/tmp/apt/archives" \
+            install -y --no-install-recommends \
             git git-lfs curl wget repo \
             bc bison build-essential ccache \
             flex g++-multilib gcc-multilib \
@@ -46,7 +54,8 @@ jobs:
             zip zlib1g-dev python3 python-is-python3 \
             openjdk-21-jdk
           sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
+          sudo rm -rf "$BUILD_DIR/tmp/apt/lists/"*
+          sudo rm -rf "$BUILD_DIR/tmp/apt/archives/"*
           git lfs install
           java -version
           repo version

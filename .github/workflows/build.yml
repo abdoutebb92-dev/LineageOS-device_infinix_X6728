@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
-      BUILD_DIR: ${{ github.workspace }}/lineage
+      BUILD_DIR: ${{ runner.temp }}/lineage
 
     steps:
       # Keep the runner's original single root filesystem. Do not create an LVM
@@ -171,7 +171,7 @@ jobs:
         with:
           name: LineageOS-23.2-X6728
           path: |
-            ${{ github.workspace }}/lineage/out/target/product/X6728/*.zip
-            ${{ github.workspace }}/lineage/out/target/product/X6728/*.img
+            ${{ runner.temp }}/lineage/out/target/product/X6728/*.zip
+            ${{ runner.temp }}/lineage/out/target/product/X6728/*.img
           if-no-files-found: error
           retention-days: 7

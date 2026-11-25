@@ -1,0 +1,206 @@
+name: Deep LineageOS GSI audit - Infinix X6728
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x6728-gsi-deep-audit
+  cancel-in-progress: false
+
+jobs:
+  deep-audit:
+    name: Deep read-only GSI and X6728 compatibility audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GSI_TAG: v2026.10.16-lineage23.2
+      GSI_FILE: lineage-23.2-20261016-UNOFFICIAL-arm64_bgN4.img.xz
+      DEVICE_REPO: https://github.com/Andrikurn/android_device_infinix_X6728.git
+      DEVICE_REF: lineage-23.2
+      VENDOR_REPO: https://github.com/Andrikurn/android_vendor_infinix_X6728.git
+      VENDOR_REF: lineage-23.2
+      KERNEL_REPO: https://github.com/Andrikurn/android_device_infinix_X6728-kernel.git
+      KERNEL_REF: sixteen
+    steps:
+      - name: Checkout audit definitions
+        uses: actions/checkout@v4
+
+      - name: Prepare a single workspace and record runner capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /opt/hostedtoolcache/CodeQL /opt/ghc /usr/local/lib/android
+          sudo apt-get clean
+          mkdir -p "$RUNNER_TEMP/x6728-audit"/{downloads,mnt,report,src}
+          {
+            echo "=== Initial runner capacity ==="
+            df -hT /
+            df -i /
+            echo "=== Memory ==="
+            free -h
+          } | tee "$RUNNER_TEMP/x6728-audit/report/runner.txt"
+
+      - name: Install forensic and XML tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends git curl xz-utils file e2fsprogs android-sdk-libsparse-utils python3 python3-lxml xmlstarlet
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          command -v simg2img || true
+          df -hT /
+
+      - name: Download pinned GSI and verify its integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/x6728-audit/downloads"
+          base="https://github.com/kkhunter2/lineage_gsi/releases/download/$GSI_TAG"
+          curl --fail --location --retry 4 --retry-all-errors "$base/$GSI_FILE" -o "$GSI_FILE"
+          curl --fail --location --retry 4 --retry-all-errors "$base/$GSI_FILE.sha256" -o "$GSI_FILE.sha256"
+          sha256sum --check "$GSI_FILE.sha256"
+          xz --test "$GSI_FILE"
+          xz -dk "$GSI_FILE"
+          image="${GSI_FILE%.xz}"
+          {
+            echo "GSI asset: $GSI_FILE"
+            ls -lh "$GSI_FILE" "$image"
+            sha256sum "$GSI_FILE" "$image"
+            file "$image"
+            stat -c '%n %s bytes' "$image"
+          } | tee "$RUNNER_TEMP/x6728-audit/report/gsi-image.txt"
+          df -hT /
+
+      - name: Normalize sparse image and inspect filesystem read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/x6728-audit/downloads"
+          image="${GSI_FILE%.xz}"
+          raw="$image"
+          if file "$image" | grep -qi 'Android sparse image'; then
+            simg2img "$image" "$RUNNER_TEMP/x6728-audit/system.raw.img"
+            raw="$RUNNER_TEMP/x6728-audit/system.raw.img"
+          fi
+          echo "$raw" > "$RUNNER_TEMP/x6728-audit/report/image-path.txt"
+          file "$raw" | tee -a "$RUNNER_TEMP/x6728-audit/report/gsi-image.txt"
+          sudo blkid -p "$raw" | tee -a "$RUNNER_TEMP/x6728-audit/report/gsi-image.txt" || true
+          if sudo mount -o loop,ro,noload "$raw" "$RUNNER_TEMP/x6728-audit/mnt"; then
+            echo "MOUNT_OK" > "$RUNNER_TEMP/x6728-audit/report/mount-status.txt"
+            sudo find "$RUNNER_TEMP/x6728-audit/mnt" -maxdepth 5 -type f \( -name build.prop -o -path '*/etc/vintf/*.xml' -o -path '*/etc/permissions/*.xml' \) -print | sort > "$RUNNER_TEMP/x6728-audit/report/gsi-files.txt"
+            sudo find "$RUNNER_TEMP/x6728-audit/mnt" -type f \( -name build.prop -o -path '*/etc/vintf/*.xml' \) -exec cp --parents '{}' "$RUNNER_TEMP/x6728-audit/report/" \;
+            sudo umount "$RUNNER_TEMP/x6728-audit/mnt"
+          else
+            echo "MOUNT_FAILED" > "$RUNNER_TEMP/x6728-audit/report/mount-status.txt"
+            echo "Could not mount filesystem read-only; image analysis is incomplete." | tee -a "$RUNNER_TEMP/x6728-audit/report/gsi-image.txt"
+          fi
+          df -hT /
+
+      - name: Fetch exact X6728 device, vendor and kernel source revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/x6728-audit/src"
+          git clone --filter=blob:none --no-checkout "$DEVICE_REPO" device
+          git -C device checkout --depth=1 "$DEVICE_REF"
+          git clone --filter=blob:none --no-checkout "$VENDOR_REPO" vendor
+          git -C vendor checkout --depth=1 "$VENDOR_REF"
+          git clone --filter=blob:none --no-checkout "$KERNEL_REPO" kernel
+          git -C kernel checkout --depth=1 "$KERNEL_REF"
+          {
+            echo "DEVICE $DEVICE_REF $(git -C device rev-parse HEAD)"
+            echo "VENDOR $VENDOR_REF $(git -C vendor rev-parse HEAD)"
+            echo "KERNEL $KERNEL_REF $(git -C kernel rev-parse HEAD)"
+          } | tee "$RUNNER_TEMP/x6728-audit/report/source-revisions.txt"
+          for f in device/BoardConfig.mk device/device.mk device/configs/vintf/manifest.xml device/init/fstab.mt6768 vendor/X6728-vendor.mk; do
+            if [ ! -s "$f" ]; then echo "MISSING REQUIRED FILE: $f"; fi
+          done
+          find device vendor kernel -type f \( -iname '*manifest*.xml' -o -iname '*matrix*.xml' -o -iname '*fstab*' -o -iname '*defconfig*' -o -iname '*dtb*' -o -iname '*dtbo*' -o -iname '*vintf*.xml' \) -print | sort > "$RUNNER_TEMP/x6728-audit/report/device-file-inventory.txt"
+
+      - name: Analyze build properties, VINTF, fstab, partitions and kernel configuration
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/x6728-audit"
+          REPORT="$ROOT/report/deep-audit.md"
+          SRC="$ROOT/src"
+          MNT="$ROOT/mnt"
+          {
+            echo "# Deep GSI / Infinix X6728 compatibility audit"
+            echo
+            echo "- Generated: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            echo "- GSI: $GSI_TAG / $GSI_FILE"
+            echo "- Device: Infinix X6728 / MT6768 (as identified by supplied device-tree project)"
+            echo "- Mode: read-only; no phone access, flashing, partition writes, or image modifications"
+            echo
+            echo "## Executive status"
+            echo "This workflow gathers evidence and flags risks. It cannot certify bootability without the phone's actual partition map, stock vendor state, bootloader/AVB state, and a controlled boot test."
+            echo
+            echo "## GSI image and filesystem"
+            cat "$ROOT/report/gsi-image.txt" 2>/dev/null || true
+            cat "$ROOT/report/mount-status.txt" 2>/dev/null || true
+            echo
+            echo "## GSI build properties"
+            if [ -f "$MNT/build.prop" ]; then
+              grep -E '^(ro\.(build\.version\.(release|sdk|codename)|product\.cpu\.abi|product\.cpu\.abilist|vndk\.version|vendor\.api_level|build\.version\.sdk|treble\.enabled)|ro\.product\.(system|vendor)\.device)=' "$MNT/build.prop" || true
+            else
+              echo "Root build.prop not found at mount root; see extracted file inventory."
+            fi
+            find "$MNT" -type f -name build.prop -print 2>/dev/null | while read -r f; do
+              echo "### $f"
+              grep -E '^(ro\.(build\.version\.(release|sdk|codename)|product\.cpu\.abi|product\.cpu\.abilist|vndk\.version|vendor\.api_level|build\.version\.sdk)|ro\.product\.(system|vendor)\.device)=' "$f" || true
+            done
+            echo
+            echo "## X6728 BoardConfig and product flags"
+            grep -nEi 'TARGET_ARCH|TARGET_2ND_ARCH|TARGET_CPU_ABI|TARGET_BOARD_PLATFORM|AB_OTA|AB_OTA_UPDATER|DYNAMIC_PARTITION|SUPER_PARTITION|PARTITION_SIZE|PARTITION_RESERVED|BOARD_BOOT_HEADER|BOARD_KERNEL|BOARD_INCLUDE_DTB|BOARD_AVB|AVB_' "$SRC/device/BoardConfig.mk" "$SRC/device/device.mk" "$SRC/device"/*.mk 2>/dev/null | head -300 || true
+            echo
+            echo "## X6728 fstab and mount / AVB flags"
+            find "$SRC/device" "$SRC/vendor" -type f -iname '*fstab*' -print 2>/dev/null | while read -r f; do
+              echo "### $f"
+              sed -n '1,240p' "$f"
+            done
+            echo
+            echo "## Device and vendor VINTF XML inventory"
+            find "$SRC/device" "$SRC/vendor" "$MNT" -type f -path '*/vintf/*.xml' -o -type f -iname '*manifest*.xml' -o -type f -iname '*matrix*.xml' 2>/dev/null | sort -u | while read -r f; do
+              echo "### $f"
+              grep -E '<(manifest|compatibility-matrix|hal|name|version|fqname|interface|instance|kernel|sepolicy|avb|vendor-ndk|system-sdk)' "$f" | head -160 || true
+            done
+            echo
+            echo "## Kernel configuration, DTB and DTBO"
+            find "$SRC/kernel" -type f \( -name '*defconfig' -o -name '.config' \) -print | head -30 | while read -r f; do
+              echo "### $f"
+              grep -E '^(CONFIG_(ARM64|64BIT|ANDROID|ANDROID_BINDER_IPC|ANDROID_BINDERFS|MODULES|MODVERSIONS|BLK_DEV_DM|DM_VERITY|DM_VERITY_FEC|EXT4_FS|F2FS_FS|OVERLAY_FS|SELINUX|SECURITY_SELINUX|IKCONFIG|IKCONFIG_PROC|USB_CONFIGFS|USB_G_ANDROID|MTK|MEDIATEK|MTK_PLATFORM))=' "$f" | head -120 || true
+            done
+            find "$SRC/kernel" -type f \( -name '*.dtb' -o -name '*.dtbo' -o -name 'Image*' \) -printf '%p %s bytes\n' 2>/dev/null | head -120
+            echo
+            echo "## Repository revisions"
+            cat "$ROOT/report/source-revisions.txt" 2>/dev/null || true
+            echo
+            echo "## Required source files"
+            for f in "$SRC/device/BoardConfig.mk" "$SRC/device/configs/vintf/manifest.xml" "$SRC/device/init/fstab.mt6768" "$SRC/vendor/X6728-vendor.mk" "$SRC/kernel/dtb/mt6768.dtb" "$SRC/kernel/dtb/dtbo.img"; do
+              if [ -s "$f" ]; then echo "PRESENT $f ($(stat -c %s "$f") bytes)"; else echo "MISSING/EMPTY $f"; fi
+            done
+            echo
+            echo "## Important limitations and next gates"
+            echo "- The device-tree super partition size is a build declaration, not proof of the phone's real partition geometry."
+            echo "- Vendor HAL compatibility requires matching actual vendor manifest, framework compatibility matrix, target FCM level and runtime checkvintf; text extraction alone is not a full VINTF validation."
+            echo "- AVB state, bootloader unlock state, vbmeta chain, slot metadata, dynamic partition metadata and exact partition sizes are not obtainable from these source repositories alone."
+            echo "- Kernel source/config and DTB presence do not prove the kernel matches the installed stock vendor or boot image."
+            echo "- A successful audit does not produce a flashable ROM and does not authorize flashing."
+          } > "$REPORT"
+          cat "$REPORT"
+
+      - name: Upload complete deep audit bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: X6728-GSI-deep-audit
+          path: |
+            ${{ runner.temp }}/x6728-audit/report/
+          if-no-files-found: warn
+          retention-days: 14

@@ -92,7 +92,6 @@ jobs:
           if sudo mount -o loop,ro,noload "$raw" "$RUNNER_TEMP/x6728-audit/mnt"; then
             echo "MOUNT_OK" > "$RUNNER_TEMP/x6728-audit/report/mount-status.txt"
             sudo find "$RUNNER_TEMP/x6728-audit/mnt" -maxdepth 5 -type f \( -name build.prop -o -path '*/etc/vintf/*.xml' -o -path '*/etc/permissions/*.xml' \) -print | sort > "$RUNNER_TEMP/x6728-audit/report/gsi-files.txt"
-            sudo find "$RUNNER_TEMP/x6728-audit/mnt" -type f \( -name build.prop -o -path '*/etc/vintf/*.xml' \) -exec cp --parents '{}' "$RUNNER_TEMP/x6728-audit/report/" \;
             # Keep the read-only mount available to the analysis step in this job.
           else
             echo "MOUNT_FAILED" > "$RUNNER_TEMP/x6728-audit/report/mount-status.txt"
@@ -105,12 +104,9 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/x6728-audit/src"
-          git clone --filter=blob:none --no-checkout "$DEVICE_REPO" device
-          git -C device checkout --depth=1 "$DEVICE_REF"
-          git clone --filter=blob:none --no-checkout "$VENDOR_REPO" vendor
-          git -C vendor checkout --depth=1 "$VENDOR_REF"
-          git clone --filter=blob:none --no-checkout "$KERNEL_REPO" kernel
-          git -C kernel checkout --depth=1 "$KERNEL_REF"
+          git clone --depth=1 --filter=blob:none --branch "$DEVICE_REF" "$DEVICE_REPO" device
+          git clone --depth=1 --filter=blob:none --branch "$VENDOR_REF" "$VENDOR_REPO" vendor
+          git clone --depth=1 --filter=blob:none --branch "$KERNEL_REF" "$KERNEL_REPO" kernel
           {
             echo "DEVICE $DEVICE_REF $(git -C device rev-parse HEAD)"
             echo "VENDOR $VENDOR_REF $(git -C vendor rev-parse HEAD)"
@@ -130,7 +126,7 @@ jobs:
           REPORT="$ROOT/report/deep-audit.md"
           SRC="$ROOT/src"
           MNT="$ROOT/mnt"
-          python3 - "$SRC" "$MNT" "$ROOT/report/vintf-analysis.txt" <<'PY'
+          sudo python3 - "$SRC" "$MNT" "$ROOT/report/vintf-analysis.txt" <<'PY'
           import os, sys, glob, xml.etree.ElementTree as ET
           src, mnt, out = sys.argv[1:]
           def local(tag): return tag.rsplit('}', 1)[-1]
@@ -179,6 +175,7 @@ jobs:
               for name in sorted(optional): f.write("  " + name + "\n")
               f.write("\nCAUTION: Name-only static comparison; not a full VINTF, version, instance, FCM, kernel, or runtime checkvintf validation.\n")
           PY
+          sudo chown "$(id -u):$(id -g)" "$ROOT/report/vintf-analysis.txt"
           {
             echo "# Deep GSI / Infinix X6728 compatibility audit"
             echo
@@ -195,14 +192,14 @@ jobs:
             cat "$ROOT/report/mount-status.txt" 2>/dev/null || true
             echo
             echo "## GSI build properties"
-            if [ -f "$MNT/build.prop" ]; then
-              grep -E '^(ro\.(build\.version\.(release|sdk|codename)|product\.cpu\.abi|product\.cpu\.abilist|vndk\.version|vendor\.api_level|build\.version\.sdk|treble\.enabled)|ro\.product\.(system|vendor)\.device)=' "$MNT/build.prop" || true
+            if sudo test -f "$MNT/build.prop"; then
+              sudo grep -E '^(ro\.(build\.version\.(release|sdk|codename)|product\.cpu\.abi|product\.cpu\.abilist|vndk\.version|vendor\.api_level|build\.version\.sdk|treble\.enabled)|ro\.product\.(system|vendor)\.device)=' "$MNT/build.prop" || true
             else
               echo "Root build.prop not found at mount root; see extracted file inventory."
             fi
-            find "$MNT" -type f -name build.prop -print 2>/dev/null | while read -r f; do
+            sudo find "$MNT" -type f -name build.prop -print 2>/dev/null | while read -r f; do
               echo "### $f"
-              grep -E '^(ro\.(build\.version\.(release|sdk|codename)|product\.cpu\.abi|product\.cpu\.abilist|vndk\.version|vendor\.api_level|build\.version\.sdk)|ro\.product\.(system|vendor)\.device)=' "$f" || true
+              sudo grep -E '^(ro\.(build\.version\.(release|sdk|codename)|product\.cpu\.abi|product\.cpu\.abilist|vndk\.version|vendor\.api_level|build\.version\.sdk)|ro\.product\.(system|vendor)\.device)=' "$f" || true
             done
             echo
             echo "## Parsed VINTF name-level comparison (candidate gaps, not definitive failures)"
@@ -218,9 +215,9 @@ jobs:
             done
             echo
             echo "## Device and vendor VINTF XML inventory"
-            find "$SRC/device" "$SRC/vendor" "$MNT" -type f -path '*/vintf/*.xml' -o -type f -iname '*manifest*.xml' -o -type f -iname '*matrix*.xml' 2>/dev/null | sort -u | while read -r f; do
+            sudo find "$SRC/device" "$SRC/vendor" "$MNT" -type f \( -path '*/vintf/*.xml' -o -iname '*manifest*.xml' -o -iname '*matrix*.xml' \) 2>/dev/null | sort -u | while read -r f; do
               echo "### $f"
-              grep -E '<(manifest|compatibility-matrix|hal|name|version|fqname|interface|instance|kernel|sepolicy|avb|vendor-ndk|system-sdk)' "$f" | head -160 || true
+              sudo grep -E '<(manifest|compatibility-matrix|hal|name|version|fqname|interface|instance|kernel|sepolicy|avb|vendor-ndk|system-sdk)' "$f" | head -160 || true
             done
             echo
             echo "## Kernel configuration, DTB and DTBO"

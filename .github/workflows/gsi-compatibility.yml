@@ -1,0 +1,157 @@
+name: Inspect LineageOS GSI compatibility - Infinix X6728
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-gsi:
+    name: Download and inspect candidate GSI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+
+      - name: Free space and prepare workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /opt/hostedtoolcache/CodeQL /opt/ghc /usr/local/lib/android
+          sudo apt-get clean
+          mkdir -p "$RUNNER_TEMP/gsi-audit"
+          echo "=== Disk after cleanup ==="
+          df -hT /
+          df -i /
+
+      - name: Install image inspection tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends git curl xz-utils file e2fsprogs python3
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          df -hT /
+
+      - name: Download pinned LineageOS 23.2 GSI and verify checksum
+        shell: bash
+        env:
+          GSI_TAG: v2026.10.16-lineage23.2
+          GSI_FILE: lineage-23.2-20261016-UNOFFICIAL-arm64_bgN4.img.xz
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/gsi-audit"
+          BASE="https://github.com/kkhunter2/lineage_gsi/releases/download/$GSI_TAG"
+          curl --fail --location --retry 3 --retry-all-errors "$BASE/$GSI_FILE" -o "$GSI_FILE"
+          curl --fail --location --retry 3 --retry-all-errors "$BASE/$GSI_FILE.sha256" -o "$GSI_FILE.sha256"
+          cat "$GSI_FILE.sha256"
+          sha256sum --check "$GSI_FILE.sha256"
+          xz --test "$GSI_FILE"
+          echo "=== Compressed image ==="
+          ls -lh "$GSI_FILE"
+          df -hT /
+
+      - name: Extract and inspect GSI image without modifying it
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/gsi-audit"
+          xz --decompress --keep "$GSI_FILE"
+          IMG="${GSI_FILE%.xz}"
+          echo "=== Image file identification ==="
+          file "$IMG"
+          ls -lh "$IMG"
+          echo "=== Filesystem probe (read-only) ==="
+          sudo blkid -p "$IMG" || true
+          echo "=== Image size in bytes ==="
+          stat -c '%n %s bytes' "$IMG"
+          df -hT /
+
+      - name: Fetch X6728 device, vendor and kernel metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/gsi-audit"
+          git clone --depth=1 --branch lineage-23.2 https://github.com/Andrikurn/android_device_infinix_X6728.git device
+          git clone --depth=1 --branch lineage-23.2 https://github.com/Andrikurn/android_vendor_infinix_X6728.git vendor
+          git clone --depth=1 --branch sixteen https://github.com/Andrikurn/android_device_infinix_X6728-kernel.git kernel
+          test -s device/BoardConfig.mk
+          test -s device/configs/vintf/manifest.xml
+          test -s device/init/fstab.mt6768
+          test -s vendor/X6728-vendor.mk
+          test -s kernel/dtb/mt6768.dtb
+          test -s kernel/dtb/dtbo.img
+          echo "=== X6728 key configuration ==="
+          grep -nE 'AB_OTA_UPDATER|TARGET_ARCH :=|TARGET_CPU_ABI :=|PRODUCT_USE_DYNAMIC_PARTITIONS|BOARD_SUPER_PARTITION_SIZE|BOARD_.*IMAGE_FILE_SYSTEM_TYPE|TARGET_BOARD_PLATFORM' device/BoardConfig.mk device/device.mk || true
+          echo "=== VINTF declarations ==="
+          grep -nE 'target-level|version=|<manifest|<hal' device/configs/vintf/manifest.xml | head -100 || true
+          echo "=== Fstab ==="
+          sed -n '1,220p' device/init/fstab.mt6768
+          echo "=== Device dependencies ==="
+          cat device/lineage.dependencies 2>/dev/null || true
+          echo "=== Repository revisions ==="
+          git -C device rev-parse HEAD
+          git -C vendor rev-parse HEAD
+          git -C kernel rev-parse HEAD
+
+      - name: Produce audit report
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/gsi-audit-report"
+          mkdir -p "$OUT"
+          {
+            echo "# X6728 / LineageOS GSI compatibility preflight"
+            echo
+            echo "- Candidate: unofficial LineageOS 23.2 GSI"
+            echo "- Release: v2026.10.16-lineage23.2"
+            echo "- Image: lineage-23.2-20261016-UNOFFICIAL-arm64_bgN4.img.xz"
+            echo "- Device target: Infinix X6728 / MT6768"
+            echo
+            echo "## Important"
+            echo "This is a read-only preflight, not a port and not a flashable X6728 ROM."
+            echo "Treble and A/B support alone do not prove vendor, VINTF, dynamic-partition, AVB, kernel or hardware compatibility."
+            echo "No partition is modified and no image is repacked by this workflow."
+            echo
+            echo "## Runner disk"
+            df -hT /
+            echo
+            echo "## Image"
+            if [ -f "$RUNNER_TEMP/gsi-audit/lineage-23.2-20261016-UNOFFICIAL-arm64_bgN4.img" ]; then
+              file "$RUNNER_TEMP/gsi-audit/lineage-23.2-20261016-UNOFFICIAL-arm64_bgN4.img"
+              stat -c '%n %s bytes' "$RUNNER_TEMP/gsi-audit/lineage-23.2-20261016-UNOFFICIAL-arm64_bgN4.img"
+              sha256sum "$RUNNER_TEMP/gsi-audit/lineage-23.2-20261016-UNOFFICIAL-arm64_bgN4.img"
+            else
+              echo "Image extraction did not complete."
+            fi
+            echo
+            echo "## X6728 device configuration"
+            if [ -f "$RUNNER_TEMP/gsi-audit/device/BoardConfig.mk" ]; then
+              grep -nE 'AB_OTA_UPDATER|TARGET_ARCH :=|TARGET_CPU_ABI :=|PRODUCT_USE_DYNAMIC_PARTITIONS|BOARD_SUPER_PARTITION_SIZE|BOARD_.*IMAGE_FILE_SYSTEM_TYPE|TARGET_BOARD_PLATFORM' "$RUNNER_TEMP/gsi-audit/device/BoardConfig.mk" "$RUNNER_TEMP/gsi-audit/device/device.mk" || true
+              echo
+              echo "### VINTF"
+              sed -n '1,240p' "$RUNNER_TEMP/gsi-audit/device/configs/vintf/manifest.xml" 2>/dev/null || true
+              echo
+              echo "### fstab"
+              sed -n '1,240p' "$RUNNER_TEMP/gsi-audit/device/init/fstab.mt6768" 2>/dev/null || true
+              echo
+              echo "### lineage.dependencies"
+              cat "$RUNNER_TEMP/gsi-audit/device/lineage.dependencies" 2>/dev/null || true
+            else
+              echo "Device tree clone did not complete."
+            fi
+          } > "$OUT/compatibility-preflight.md"
+          cat "$OUT/compatibility-preflight.md"
+
+      - name: Upload compatibility report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: X6728-GSI-compatibility-preflight
+          path: ${{ runner.temp }}/gsi-audit-report/compatibility-preflight.md
+          if-no-files-found: warn
+          retention-days: 14

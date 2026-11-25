@@ -130,6 +130,55 @@ jobs:
           REPORT="$ROOT/report/deep-audit.md"
           SRC="$ROOT/src"
           MNT="$ROOT/mnt"
+          python3 - "$SRC" "$MNT" "$ROOT/report/vintf-analysis.txt" <<'PY'
+          import os, sys, glob, xml.etree.ElementTree as ET
+          src, mnt, out = sys.argv[1:]
+          def local(tag): return tag.rsplit('}', 1)[-1]
+          def parse_file(path):
+              try: return ET.parse(path).getroot()
+              except Exception: return None
+          def hal_names(root):
+              found = set()
+              if root is None: return found
+              for hal in (x for x in root.iter() if local(x.tag) == "hal"):
+                  name = next((x.text.strip() for x in hal if local(x.tag) == "name" and x.text), None)
+                  if name: found.add(name)
+              return found
+          device_xml = []
+          for base in (os.path.join(src, "device"), os.path.join(src, "vendor")):
+              for path in glob.glob(base + "/**/*.xml", recursive=True):
+                  low = path.lower()
+                  if "vintf" in low or "manifest" in os.path.basename(low) or "matrix" in os.path.basename(low):
+                      device_xml.append(path)
+          gsi_xml = glob.glob(mnt + "/**/etc/vintf/*.xml", recursive=True) if os.path.isdir(mnt) else []
+          device_hal = set()
+          for path in device_xml:
+              root = parse_file(path)
+              if root is not None and local(root.tag) == "manifest":
+                  device_hal |= hal_names(root)
+          matrix_files, required, optional = [], set(), set()
+          for path in gsi_xml:
+              root = parse_file(path)
+              if root is None: continue
+              if local(root.tag) == "compatibility-matrix":
+                  matrix_files.append(path)
+                  for hal in (x for x in root.iter() if local(x.tag) == "hal"):
+                      name = next((x.text.strip() for x in hal if local(x.tag) == "name" and x.text), None)
+                      if name:
+                          (optional if hal.attrib.get("optional", "false").lower() == "true" else required).add(name)
+          with open(out, "w") as f:
+              f.write("VINTF XML files in device/vendor source: %d\\n" % len(device_xml))
+              f.write("GSI VINTF XML files: %d\\n" % len(gsi_xml))
+              f.write("Device/vendor manifest HAL names: %d\\n" % len(device_hal))
+              f.write("GSI framework matrix files: %d\\n" % len(matrix_files))
+              f.write("\\nDevice/vendor manifest HAL inventory:\\n")
+              for name in sorted(device_hal): f.write("  " + name + "\\n")
+              f.write("\\nRequired GSI framework-matrix HAL names not seen in source manifests (candidate gaps):\\n")
+              for name in sorted(required - device_hal): f.write("  " + name + "\\n")
+              f.write("\\nOptional GSI framework-matrix HAL names:\\n")
+              for name in sorted(optional): f.write("  " + name + "\\n")
+              f.write("\\nCAUTION: Name-only static comparison; not a full VINTF, version, instance, FCM, kernel, or runtime checkvintf validation.\\n")
+          PY
           {
             echo "# Deep GSI / Infinix X6728 compatibility audit"
             echo
@@ -155,6 +204,9 @@ jobs:
               echo "### $f"
               grep -E '^(ro\.(build\.version\.(release|sdk|codename)|product\.cpu\.abi|product\.cpu\.abilist|vndk\.version|vendor\.api_level|build\.version\.sdk)|ro\.product\.(system|vendor)\.device)=' "$f" || true
             done
+            echo
+            echo "## Parsed VINTF name-level comparison (candidate gaps, not definitive failures)"
+            cat "$ROOT/report/vintf-analysis.txt" 2>/dev/null || true
             echo
             echo "## X6728 BoardConfig and product flags"
             grep -nEi 'TARGET_ARCH|TARGET_2ND_ARCH|TARGET_CPU_ABI|TARGET_BOARD_PLATFORM|AB_OTA|AB_OTA_UPDATER|DYNAMIC_PARTITION|SUPER_PARTITION|PARTITION_SIZE|PARTITION_RESERVED|BOARD_BOOT_HEADER|BOARD_KERNEL|BOARD_INCLUDE_DTB|BOARD_AVB|AVB_' "$SRC/device/BoardConfig.mk" "$SRC/device/device.mk" "$SRC/device"/*.mk 2>/dev/null | head -300 || true

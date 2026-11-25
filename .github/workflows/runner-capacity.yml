@@ -1,0 +1,41 @@
+name: Android build capacity check - X6728
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capacity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Free runner disk space without creating extra filesystems
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Disk before cleanup ==="
+          df -hT /
+          df -i /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /var/lib/docker
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          echo "=== Disk after cleanup ==="
+          df -hT /
+          df -i /
+          echo "=== Mounts ==="
+          findmnt
+          echo "=== Memory ==="
+          free -h
+          echo "=== largest remaining directories ==="
+          sudo du -xhd1 /usr /opt /var 2>/dev/null | sort -h | tail -40
+          available_gb=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          echo "Available disk after cleanup: ${available_gb} GB"
+          if [ "$available_gb" -lt 80 ]; then
+            echo "Runner is below a conservative 80 GB minimum for Android source sync/build."
+            echo "This diagnostic intentionally does not start repo sync."
+          else
+            echo "Runner capacity is above the preflight threshold; this is not a guarantee of build completion."
+          fi

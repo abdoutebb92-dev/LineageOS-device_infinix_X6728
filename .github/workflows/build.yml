@@ -15,11 +15,24 @@ jobs:
       BUILD_DIR: ${{ github.workspace }}/lineage
 
     steps:
-      # Install packages BEFORE moving the runner workspace to the large build volume.
-      - name: Install dependencies
+      # This must run before apt installs: it moves the workspace onto the
+      # combined build volume and removes large preinstalled toolchains we do not use.
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 4096
+          temp-reserve-mb: 100
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: Install only required build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             git git-lfs curl wget repo \
             bc bison build-essential ccache \
             flex g++-multilib gcc-multilib \
@@ -38,22 +51,19 @@ jobs:
           java -version
           repo version
 
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@v10
-        with:
-          root-reserve-mb: 2048
-          swap-size-mb: 4096
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-
-      - name: Check available disk space
+      - name: Prepare build and temporary directories
         run: |
-          df -h /
-          df -h "$GITHUB_WORKSPACE"
-          mkdir -p "$BUILD_DIR"
-          df -h "$BUILD_DIR"
+          mkdir -p "$BUILD_DIR/tmp"
+          echo "TMPDIR=$BUILD_DIR/tmp" >> "$GITHUB_ENV"
+          echo "TMP=$BUILD_DIR/tmp" >> "$GITHUB_ENV"
+          echo "TEMP=$BUILD_DIR/tmp" >> "$GITHUB_ENV"
+          echo "GIT_LFS_SKIP_SMUDGE=1" >> "$GITHUB_ENV"
+          echo "=== Filesystems ==="
+          df -hT / "$GITHUB_WORKSPACE" "$BUILD_DIR" /mnt /tmp
+          df -i "$GITHUB_WORKSPACE" "$BUILD_DIR"
+          findmnt -T "$BUILD_DIR"
+          echo "=== Memory ==="
+          free -h
 
       - name: Configure Git
         run: |
@@ -62,7 +72,6 @@ jobs:
 
       - name: Initialize LineageOS
         run: |
-          mkdir -p "$BUILD_DIR"
           cd "$BUILD_DIR"
           repo init \
             -u https://github.com/LineageOS/android.git \
@@ -108,7 +117,14 @@ jobs:
       - name: Sync Android sources
         run: |
           cd "$BUILD_DIR"
+          echo "=== Disk before repo sync ==="
+          df -hT / "$BUILD_DIR" "$TMPDIR"
+          df -i "$BUILD_DIR"
           repo sync -c --no-tags --no-clone-bundle --force-sync --optimized-fetch --prune -j2 --fail-fast
+          echo "=== Disk after repo sync ==="
+          df -hT / "$BUILD_DIR" "$TMPDIR"
+          df -i "$BUILD_DIR"
+          du -sh "$BUILD_DIR" "$BUILD_DIR/.repo" "$TMPDIR" 2>/dev/null || true
 
       - name: Pull and verify vendor LFS files
         run: |
@@ -127,15 +143,15 @@ jobs:
           test -f device/infinix/X6728-kernel/dtb/dtbo.img
           test -f vendor/infinix/X6728/X6728-vendor.mk
           test -f vendor/mediatek/ims/ims-vendor.mk
-          df -h /
-          df -h "$BUILD_DIR"
+          df -hT / "$BUILD_DIR"
+          du -sh "$BUILD_DIR" "$BUILD_DIR/.repo" 2>/dev/null || true
 
       - name: Build LineageOS
         run: |
           cd "$BUILD_DIR"
           export USE_CCACHE=1
           export CCACHE_EXEC=/usr/bin/ccache
-          ccache -M 20G
+          ccache -M 8G
           source build/envsetup.sh
           lunch lineage_X6728-userdebug
           mka bacon -j2

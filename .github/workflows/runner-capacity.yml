@@ -9,7 +9,7 @@ permissions:
 jobs:
   capacity:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 360
     steps:
       - name: Free runner disk space without creating extra filesystems
         shell: bash
@@ -39,3 +39,8 @@ jobs:
           else
             echo "Runner capacity is above the preflight threshold; this is not a guarantee of build completion."
           fi
+
+      - name: Start temporary SSH session
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true

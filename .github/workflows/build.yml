@@ -11,23 +11,11 @@ jobs:
     name: Build ROM
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    env:
+      BUILD_DIR: ${{ github.workspace }}/lineage
 
     steps:
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@v10
-        with:
-          root-reserve-mb: 2048
-          swap-size-mb: 4096
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-
-      - name: Check available disk space
-        run: |
-          df -h /
-          df -h "$GITHUB_WORKSPACE"
-
+      # Install packages BEFORE moving the runner workspace to the large build volume.
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -44,10 +32,28 @@ jobs:
             squashfs-tools xsltproc \
             zip zlib1g-dev python3 python-is-python3 \
             openjdk-21-jdk
-
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
           git lfs install
           java -version
           repo version
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 2048
+          swap-size-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: Check available disk space
+        run: |
+          df -h /
+          df -h "$GITHUB_WORKSPACE"
+          mkdir -p "$BUILD_DIR"
+          df -h "$BUILD_DIR"
 
       - name: Configure Git
         run: |
@@ -56,8 +62,8 @@ jobs:
 
       - name: Initialize LineageOS
         run: |
-          mkdir -p /home/runner/android/lineage
-          cd /home/runner/android/lineage
+          mkdir -p "$BUILD_DIR"
+          cd "$BUILD_DIR"
           repo init \
             -u https://github.com/LineageOS/android.git \
             -b lineage-23.2 \
@@ -66,39 +72,32 @@ jobs:
 
       - name: Create X6728 local manifest
         run: |
-          cd /home/runner/android/lineage
+          cd "$BUILD_DIR"
           mkdir -p .repo/local_manifests
-
           cat > .repo/local_manifests/x6728.xml <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <manifest>
             <remote name="x6728github" fetch="https://github.com/" />
-
             <project name="Andrikurn/android_device_infinix_X6728"
                      path="device/infinix/X6728"
                      remote="x6728github"
                      revision="lineage-23.2" />
-
             <project name="Andrikurn/android_vendor_infinix_X6728"
                      path="vendor/infinix/X6728"
                      remote="x6728github"
                      revision="lineage-23.2" />
-
             <project name="Andrikurn/android_device_infinix_X6728-kernel"
                      path="device/infinix/X6728-kernel"
                      remote="x6728github"
                      revision="sixteen" />
-
             <project name="LineageOS/android_device_mediatek_sepolicy_vndr"
                      path="device/mediatek/sepolicy_vndr"
                      remote="x6728github"
                      revision="lineage-23.2" />
-
             <project name="LineageOS/android_hardware_mediatek"
                      path="hardware/mediatek"
                      remote="x6728github"
                      revision="lineage-23.2" />
-
             <project name="MillenniumOSS/android_vendor_mediatek_ims"
                      path="vendor/mediatek/ims"
                      remote="x6728github"
@@ -108,26 +107,18 @@ jobs:
 
       - name: Sync Android sources
         run: |
-          cd /home/runner/android/lineage
-          repo sync \
-            -c \
-            --no-tags \
-            --no-clone-bundle \
-            --force-sync \
-            --optimized-fetch \
-            --prune \
-            -j2 \
-            --fail-fast
+          cd "$BUILD_DIR"
+          repo sync -c --no-tags --no-clone-bundle --force-sync --optimized-fetch --prune -j2 --fail-fast
 
       - name: Pull and verify vendor LFS files
         run: |
-          cd /home/runner/android/lineage
+          cd "$BUILD_DIR"
           git -C vendor/infinix/X6728 lfs pull
           git -C vendor/infinix/X6728 lfs fsck
 
       - name: Validate device tree and disk space
         run: |
-          cd /home/runner/android/lineage
+          cd "$BUILD_DIR"
           test -f device/infinix/X6728/AndroidProducts.mk
           test -f device/infinix/X6728/lineage_X6728.mk
           test -f device/infinix/X6728/BoardConfig.mk
@@ -137,10 +128,11 @@ jobs:
           test -f vendor/infinix/X6728/X6728-vendor.mk
           test -f vendor/mediatek/ims/ims-vendor.mk
           df -h /
+          df -h "$BUILD_DIR"
 
       - name: Build LineageOS
         run: |
-          cd /home/runner/android/lineage
+          cd "$BUILD_DIR"
           export USE_CCACHE=1
           export CCACHE_EXEC=/usr/bin/ccache
           ccache -M 20G
@@ -154,7 +146,7 @@ jobs:
         with:
           name: LineageOS-23.2-X6728
           path: |
-            /home/runner/android/lineage/out/target/product/X6728/*.zip
-            /home/runner/android/lineage/out/target/product/X6728/*.img
+            ${{ github.workspace }}/lineage/out/target/product/X6728/*.zip
+            ${{ github.workspace }}/lineage/out/target/product/X6728/*.img
           if-no-files-found: error
           retention-days: 7

@@ -167,17 +167,17 @@ jobs:
                       if name:
                           (optional if hal.attrib.get("optional", "false").lower() == "true" else required).add(name)
           with open(out, "w") as f:
-              f.write("VINTF XML files in device/vendor source: %d\\n" % len(device_xml))
-              f.write("GSI VINTF XML files: %d\\n" % len(gsi_xml))
-              f.write("Device/vendor manifest HAL names: %d\\n" % len(device_hal))
-              f.write("GSI framework matrix files: %d\\n" % len(matrix_files))
-              f.write("\\nDevice/vendor manifest HAL inventory:\\n")
-              for name in sorted(device_hal): f.write("  " + name + "\\n")
-              f.write("\\nRequired GSI framework-matrix HAL names not seen in source manifests (candidate gaps):\\n")
-              for name in sorted(required - device_hal): f.write("  " + name + "\\n")
-              f.write("\\nOptional GSI framework-matrix HAL names:\\n")
-              for name in sorted(optional): f.write("  " + name + "\\n")
-              f.write("\\nCAUTION: Name-only static comparison; not a full VINTF, version, instance, FCM, kernel, or runtime checkvintf validation.\\n")
+              f.write("VINTF XML files in device/vendor source: %d\n" % len(device_xml))
+              f.write("GSI VINTF XML files: %d\n" % len(gsi_xml))
+              f.write("Device/vendor manifest HAL names: %d\n" % len(device_hal))
+              f.write("GSI framework matrix files: %d\n" % len(matrix_files))
+              f.write("\nDevice/vendor manifest HAL inventory:\n")
+              for name in sorted(device_hal): f.write("  " + name + "\n")
+              f.write("\nRequired GSI framework-matrix HAL names not seen in source manifests (candidate gaps):\n")
+              for name in sorted(required - device_hal): f.write("  " + name + "\n")
+              f.write("\nOptional GSI framework-matrix HAL names:\n")
+              for name in sorted(optional): f.write("  " + name + "\n")
+              f.write("\nCAUTION: Name-only static comparison; not a full VINTF, version, instance, FCM, kernel, or runtime checkvintf validation.\n")
           PY
           {
             echo "# Deep GSI / Infinix X6728 compatibility audit"

@@ -93,7 +93,7 @@ jobs:
             echo "MOUNT_OK" > "$RUNNER_TEMP/x6728-audit/report/mount-status.txt"
             sudo find "$RUNNER_TEMP/x6728-audit/mnt" -maxdepth 5 -type f \( -name build.prop -o -path '*/etc/vintf/*.xml' -o -path '*/etc/permissions/*.xml' \) -print | sort > "$RUNNER_TEMP/x6728-audit/report/gsi-files.txt"
             sudo find "$RUNNER_TEMP/x6728-audit/mnt" -type f \( -name build.prop -o -path '*/etc/vintf/*.xml' \) -exec cp --parents '{}' "$RUNNER_TEMP/x6728-audit/report/" \;
-            sudo umount "$RUNNER_TEMP/x6728-audit/mnt"
+            # Keep the read-only mount available to the analysis step in this job.
           else
             echo "MOUNT_FAILED" > "$RUNNER_TEMP/x6728-audit/report/mount-status.txt"
             echo "Could not mount filesystem read-only; image analysis is incomplete." | tee -a "$RUNNER_TEMP/x6728-audit/report/gsi-image.txt"
